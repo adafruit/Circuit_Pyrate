@@ -8,9 +8,9 @@ MODE = MODE_HIZ
 HELP_MENU = """\
 MENUS
 ? Help
-I Version & status info
+i Version & status info
 M Bus mode
-B Terminal speed
+b Terminal speed
 G Freq Generator/PWM on AUX"""
 
 VERSION_INFO = """\
@@ -24,14 +24,30 @@ while True:
     commands = input(prompt)
     print("->"+commands)
 
-    c = commands[0].upper()
+    c = commands[0]
     commands = commands[1:]
     if c == '?':
         print(HELP_MENU)
-    if c == 'I':
+    elif c== 'i':
         import uos
         print(VERSION_INFO)
         print("Hardware: "+uos.uname().machine)
         print("CircuitPython: "+uos.uname().version)
-    if c == 'B':
+    elif c == 'b':
         print("No baud rate change required for USB!")
+    elif c == '=':
+        arg = commands.lstrip()
+        try:
+            if (arg.startswith("0x")):
+                val = int(arg, 16)
+            elif (arg.startswith("0b")):
+                val = int(arg, 2)
+            elif (arg.startswith("0")):
+                val = int(arg, 8)
+            else:
+                val = int(arg)
+        except:
+            print("Invalid input! "+arg)
+            continue
+        
+        print('0x{:02X} = {} = {:08b} '.format(val, val, val))
