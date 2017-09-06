@@ -141,7 +141,42 @@ while True:
         AUX = pulseio.PWMOut(AUXPIN, duty_cycle=duty, frequency=freq)
         AUX_PWMENABLED = True
 
-    elif c == 'g' and AUX_PWMENABLED:
+    elif c == 'S' and not AUX_PWMENABLED:
+        print("Servo position in degrees (0-180) or uS (200 - 3000)")
+        servoval = 0
+
+        AUX.deinit()
+        AUX_PWMENABLED = True
+        AUX = pulseio.PWMOut(AUXPIN, frequency = 50)
+        while True:
+            if (servoval < 200):
+                suffix = "*"
+            else:
+                suffix = " uS"
+            prompt = "(%d%s)>" % (servoval, suffix)
+            val = input(prompt)
+
+            if not val:
+                break
+
+            try:
+                val = int(val)
+                print(val)
+                if (val >= 0) and (val <= 180):
+                    # degrees mode
+                    pulseWidth = 0.5 + (val / 180) * (SERVO_MAXPULSE - SERVO_MINPULSE)
+                elif (val >= 200) or (val <= 3000):
+                    pulseWidth = val / 1000
+                else:
+                    raise exception()
+            except:
+                print("Invalid input: "+str(val))
+                continue
+            dutyPercent = pulseWidth / 20.0
+            AUX.duty_cycle = int(dutyPercent * 65535)
+            servoval = val
+        
+    elif (c == 'S' or c == 'g') and AUX_PWMENABLED:
         AUX.deinit()
         AUX = DigitalInOut(AUXPIN)
         AUX.direction = Direction.INPUT
