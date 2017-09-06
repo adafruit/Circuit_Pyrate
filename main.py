@@ -1,3 +1,4 @@
+
 import board
 import time
 from digitalio import DigitalInOut, Direction
@@ -16,16 +17,21 @@ AUX_PWMENABLED = False
 
 ADCPIN = AnalogIn(board.A0)
 
+SERVO_MINPULSE = 0.5
+SERVO_MAXPULSE = 2.5
+
 # make a mini REPL
 
 HELP_MENU = """\
 MENUS
 ?    \tHelp
 = X  \tConverts X to dec/hex/bin
+| X  \tReverse bits in byte X
 i    \tVersion & status info
 a/A/@\tAUXPIN (low/HIGH/READ)
 d/D  \tMeasure ADC (once/CONT.)
 g    \tFreq Generator/PWM on AUX
+S    \tServo control on AUX
 
 Unsupported: b, $"""
 
@@ -58,7 +64,7 @@ while True:
     elif c == '$':
         print("Double-click RESET to bootload!")
     # Conversion
-    elif c == '=':
+    elif c == '=' or c == '|':
         arg = commands.lstrip()
         try:
             if (arg.startswith("0x")):
@@ -72,8 +78,18 @@ while True:
         except:
             print("Invalid input! "+arg)
             continue
-        
+
+        if c == '|':
+            print("Reversing")  # can't use slices!
+            flipped = 0
+            for i in range(8):
+                flipped >>= 1
+                if (val & 0x80):
+                    flipped |= 0x80
+                val <<= 1
+            val = flipped & 0xFF
         print('0x{:02X} = {} = {:08b} '.format(val, val, val))
+            
     # AUXPIN
     elif c == 'a':
         print("AUX LOW")
