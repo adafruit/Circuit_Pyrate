@@ -3,7 +3,7 @@ import board
 import time
 from digitalio import DigitalInOut, Direction
 from analogio import AnalogIn
-import pulseio
+import pwmio
 
 # enums
 MODE_HIZ = 0
@@ -138,7 +138,7 @@ while True:
         
         print("PWM Active: {:d} {:0.2f}%".format(freq, duty/655.35)) 
         AUX.deinit()
-        AUX = pulseio.PWMOut(AUXPIN, duty_cycle=duty, frequency=freq)
+        AUX = pwmio.PWMOut(AUXPIN, duty_cycle=duty, frequency=freq)
         AUX_PWMENABLED = True
 
     elif c == 'S' and not AUX_PWMENABLED:
@@ -147,7 +147,7 @@ while True:
 
         AUX.deinit()
         AUX_PWMENABLED = True
-        AUX = pulseio.PWMOut(AUXPIN, frequency = 50)
+        AUX = pwmio.PWMOut(AUXPIN, frequency = 50)
         while True:
             if (servoval < 200):
                 suffix = "*"
