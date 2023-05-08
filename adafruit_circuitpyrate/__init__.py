@@ -16,16 +16,16 @@ S    \tServo control on AUX
 Unsupported: b, $"""
 
 modes = (
-    ("1-WIRE", "onewire"),
-    ("UART", "uart"),
+    # ("1-WIRE", "onewire"),
+    # ("UART", "uart"),
     ("I2C", "i2c"),
-    ("SPI", "spi"),
-    ("2WIRE", "mode_2wire"),
-    ("3WIRE", "mode_3wire"),
-    ("KEYB", "keyb"),
-    ("LCD", "lcd"),
-    ("PIC", "pic"),
-    ("DIO", "dio")
+    # ("SPI", "spi"),
+    # ("2WIRE", "mode_2wire"),
+    # ("3WIRE", "mode_3wire"),
+    # ("KEYB", "keyb"),
+    # ("LCD", "lcd"),
+    # ("PIC", "pic"),
+    # ("DIO", "dio")
 )
 
 class Mode:
@@ -33,17 +33,27 @@ class Mode:
         self._input = input
         self._output = output
 
-    def _print(self, *pos):
+    def _print(self, *pos, end="\r\n"):
         pos = list(pos)
         for i, s in enumerate(pos):
             if isinstance(s, str):
                 pos[i] = s.replace("\n", "\r\n")
 
-        print(*pos, file=self._output, end="\r\n")
+        print(*pos, file=self._output, end=end)
 
     def _prompt(self, message) -> str:
         message = message.replace("\n", "\r\n")
         return prompt_toolkit.prompt(message, input=self._input, output=self._output)
+
+    def run_macro(self, number):
+        if number == 0:
+            self._print("0. Macro menu")
+            for num in self.macros:
+                name, _ = self.macros[num]
+                self._print(f"{num}. {name}")
+        else:
+            _, func = self.macros[number]
+            func()
 
 class HiZ(Mode):
     name = "HiZ"
@@ -144,17 +154,23 @@ def parse_bus_actions(commands):
     return bus_sequence
 
 class Pyrate:
-    def __init__(self, input_, output, *, aux_pin, adc_pin, mosi_pin, clock_pin, miso_pin, cs_pin):
+    def __init__(self, input_, output, *, aux_pin, adc_pin, mosi_pin, clock_pin, miso_pin, cs_pin, scl_pin=None, sda_pin=None):
         self._input = input_
         self.output = output
         self.aux_pin = aux_pin
-        self.cs_pin = cs_pin
         self.user_pin = digitalio.DigitalInOut(aux_pin)
 
         # Bus pins
-        self.mosi_pin = mosi_pin
-        self.clock_pin = clock_pin
-        self.miso_pin = miso_pin
+        self.pins = {}
+        self.pins["cs"] = cs_pin
+        self.pins["mosi"] = mosi_pin
+        self.pins["clock"] = clock_pin
+        self.pins["miso"] = miso_pin
+
+        if scl_pin:
+            self.pins["scl"] = scl_pin
+        if sda_pin:
+            self.pins["sda"] = sda_pin
 
         self.adc_pin = analogio.AnalogIn(adc_pin)
 
@@ -382,7 +398,7 @@ class Pyrate:
                 self.mode = HiZ(self._input, self.output)
             else:
                 self._print("Mode selected")
-                self.mode = mode_class(self.mosi_pin, self.clock_pin, self.miso_pin, self.cs_pin, self._input, self.output)
+                self.mode = mode_class(self.pins, self._input, self.output)
 
     def run_commands(self, commands):
         if not commands:
@@ -405,7 +421,7 @@ class Pyrate:
                 selection = 0
             if selection > 0:
                 commands = history[-selection]
-                run_commands(commands)
+                self.run_commands(commands)
         elif c == "#" or c == "$":
             serial.write("Are you sure? ")
             yn = serial.read(1)
@@ -418,8 +434,11 @@ class Pyrate:
                 else:
                     serial.write(b"RESET\r\n")
                 microcontroller.reset()
+        elif c == "(":
+            m = int(commands.strip("()"), 0)
+            self.mode.run_macro(m)
         else:
             # Assume bus sequence.
-            bus_sequence = circuitpyrate.parse_bus_actions(commands)
+            bus_sequence = parse_bus_actions(commands)
             if bus_sequence:
-                session.mode.run_sequence(bus_sequence)
+                self.mode.run_sequence(bus_sequence)

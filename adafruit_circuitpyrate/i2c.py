@@ -5,33 +5,61 @@ import array
 import busio
 import bitbangio
  
+SPEEDS = (5, 50, 100, 400)
+
 class I2C(Mode):
     name = "I2C"
 
-    def __init__(self, mosi, clock, miso, chip_select, input, output):
+    def __init__(self, pins, input, output):
         super().__init__(input, output)
-        print("hello from i2c")
+
+        scl = pins["clock"]
+        sda = pins["mosi"]
+        if "scl" in pins:
+            implementation = self._prompt(f"I2C pinout:\n1. {pins["clock"]}/{pins["mosi"]}\n2. {pins["scl"]}/{pins["sda"]}\n(1) > ")
+            if implementation == "2":
+                scl = pins["scl"]
+                sda = pins["sda"]
+
+        speed = self._prompt("Set speed:\n 1. ~5KHz\n 2. ~50KHz\n 3. ~100KHz\n 4. ~400KHz\n(1) > ")
+        if not speed:
+            speed = "1"
+        speed = SPEEDS[int(speed, 10) - 1] * 1000
 
         hardware_possible = False
         try:
-            self.i2c = busio.I2C(scl=clock, sda=mosi)
-            hardware_possible = True
             print("native I2C")
+            self.i2c = busio.I2C(scl=scl, sda=sda, frequency=speed)
+            hardware_possible = True
         except ValueError:
-            self.i2c = bitbangio.I2C(scl=clock, sda=mosi)
             print("bitbang I2C")
+            self.i2c = bitbangio.I2C(scl=scl, sda=sda, frequency=speed)
         if hardware_possible:
-            implementation = self._prompt("I2C mode:\n1. Software\n2. Hardware\n(1) > ")
+            implementation = self._prompt("I2C mode:\n 1. Software\n 2. Hardware\n(1) > ")
             # Switch to bitbang
             if implementation != "2":
                 self.i2c.deinit()
-                self.i2c = bitbangio.I2C(scl=clock, sda=mosi)
+                self.i2c = bitbangio.I2C(scl=scl, sda=sda, frequency=speed)
 
-        speed = self._prompt("Set speed:\n 1. Slow(~5KHz)\n 2. Fast(~50KHz)\n(1) > ")
+
+        self.macros = {
+            1: ("7bit address search", self.scan),
+            # No CP API. 2: ("I2C sniffer", self.sniff)
+        }
+
+    def scan(self):
+        if not self.i2c.try_lock():
+            return
+        self._print("Searching I2C address space. Found devices at:")
+        addresses = self.i2c.scan()
+        space = ""
+        for address in addresses:
+            self._print(f"{space}0x{address*2:02X}(0x{address:02X} W)")
+            space = " "
+        self.i2c.unlock()
 
     def run_sequence(self, sequence):
         next_start = 0
-        print("full sequence", sequence)
         while next_start < len(sequence) and sequence[next_start] == "START":
             start = next_start
             try:
@@ -40,8 +68,6 @@ class I2C(Mode):
                 print("Missing stop")
                 break
             next_start = stop + 1
-
-            print(sequence[start:stop])
 
             try:
                 repeated_start = sequence.index("START", start + 1)
@@ -126,8 +152,8 @@ class I2C(Mode):
                 self.i2c.unlock()
                 continue
 
+            i = 0
             for action in sequence[start + 2: repeated_start]:
-                i = 0
                 if action.repeat > 1:
                     self._print("WRITE 0x{action.repeat:02X} BYTES:")
                     for j in range(action.repeat):
@@ -151,7 +177,7 @@ class I2C(Mode):
             for action in sequence[repeated_start+2:stop]:
                 i = 0
                 if action.repeat > 1:
-                    self._print("READ 0x{action.repeat:02X} BYTES:")
+                    self._print(f"READ 0x{action.repeat:02X} BYTES:")
                     for j in range(action.repeat):
                         if j > 0:
                             self._print(" ", end="")
@@ -159,6 +185,7 @@ class I2C(Mode):
                         i += 1
                         if not device_found:
                             break
+                    self._print()
                 else:
                     self._print(f"READ 0x{read_buffer[i]:02X} ACK")
                     i += 1
