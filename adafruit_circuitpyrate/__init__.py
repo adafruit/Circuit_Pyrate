@@ -28,6 +28,29 @@ modes = (
     # ("DIO", "dio")
 )
 
+class EnterBinaryMode(Exception):
+    pass
+
+class BinarySwitcher:
+    def __init__(self, serial_input):
+        self.serial_input = serial_input
+
+    def read(self, length):
+        buf = bytearray(length)
+        read_count = 0
+        null_count = 0
+        while read_count < length:
+            read = self.serial_input.read(1)
+            if read[0] == 0:
+                null_count += 1
+                if null_count >= 20:
+                    raise EnterBinaryMode()
+                continue
+            buf[read_count] = read[0]
+            read_count += 1
+        return buf
+
+
 class Mode:
     def __init__(self, input, output):
         self._input = input
@@ -428,6 +451,8 @@ class Pyrate:
             serial.write(yn)
             serial.write(b"\r\n")
             if yn == b"y":
+                # TODO: We probably shouldn't reset completely because the bus pirate
+                # wouldn't reset USB because it is a USB to serial converter.
                 if c == "$":
                     microcontroller.on_next_reset(microcontroller.RunMode.BOOTLOADER)
                     serial.write(b"BOOTLOADER\r\n")
@@ -442,3 +467,8 @@ class Pyrate:
             bus_sequence = parse_bus_actions(commands)
             if bus_sequence:
                 self.mode.run_sequence(bus_sequence)
+
+    def run_binary_mode(self):
+        from . import bitbang_mode
+        # Don't pass the wrapped input because it'll raise more exceptions.
+        bitbang_mode.run(self._input.serial_input, self.output, self.pins)
