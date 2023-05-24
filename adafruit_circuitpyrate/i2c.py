@@ -16,28 +16,27 @@ class I2C(Mode):
         scl = pins["clock"]
         sda = pins["mosi"]
         if "scl" in pins:
-            implementation = self._prompt(f"I2C pinout:\n1. {pins["clock"]}/{pins["mosi"]}\n2. {pins["scl"]}/{pins["sda"]}\n(1) > ")
-            if implementation == "2":
+            implementation = self._select_option("I2C pinout:", (f"{pins["clock"]}/{pins["mosi"]}", f"{pins["scl"]}/{pins["sda"]}"))
+            if implementation == 1:
                 scl = pins["scl"]
                 sda = pins["sda"]
 
-        speed = self._prompt("Set speed:\n 1. ~5KHz\n 2. ~50KHz\n 3. ~100KHz\n 4. ~400KHz\n(1) > ")
-        if not speed:
-            speed = "1"
-        speed = SPEEDS[int(speed, 10) - 1] * 1000
+        speed = self._select_option("Set speed:", ["~5KHz", "~50KHz", "~100KHz", "~400KHz"])
+
+        speed = SPEEDS[speed] * 1000
 
         hardware_possible = False
         try:
             print("native I2C")
             self.i2c = busio.I2C(scl=scl, sda=sda, frequency=speed)
             hardware_possible = True
-        except ValueError:
-            print("bitbang I2C")
+        except ValueError as e:
+            print("bitbang I2C", repr(e))
             self.i2c = bitbangio.I2C(scl=scl, sda=sda, frequency=speed)
         if hardware_possible:
-            implementation = self._prompt("I2C mode:\n 1. Software\n 2. Hardware\n(1) > ")
+            implementation = self._select_option("I2C mode:", ("Software", "Hardware"))
             # Switch to bitbang
-            if implementation != "2":
+            if implementation == 0:
                 self.i2c.deinit()
                 self.i2c = bitbangio.I2C(scl=scl, sda=sda, frequency=speed)
 
@@ -46,6 +45,14 @@ class I2C(Mode):
             1: ("7bit address search", self.scan),
             # No CP API. 2: ("I2C sniffer", self.sniff)
         }
+
+        self.pull_ok = True
+
+    def deinit(self):
+        self.i2c.deinit()
+
+    def print_pin_functions(self):
+        self._print("SCL     SDA     -       -")
 
     def scan(self):
         if not self.i2c.try_lock():

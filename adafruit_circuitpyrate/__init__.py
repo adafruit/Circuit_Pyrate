@@ -19,7 +19,7 @@ modes = (
     # ("1-WIRE", "onewire"),
     # ("UART", "uart"),
     ("I2C", "i2c"),
-    # ("SPI", "spi"),
+    ("SPI", "spi"),
     # ("2WIRE", "mode_2wire"),
     # ("3WIRE", "mode_3wire"),
     # ("KEYB", "keyb"),
@@ -28,19 +28,21 @@ modes = (
     # ("DIO", "dio")
 )
 
+
 class EnterBinaryMode(Exception):
     pass
 
+
 class BinarySwitcher:
-    def __init__(self, serial_input):
-        self.serial_input = serial_input
+    def __init__(self, serial):
+        self.serial = serial
 
     def read(self, length):
         buf = bytearray(length)
         read_count = 0
         null_count = 0
         while read_count < length:
-            read = self.serial_input.read(1)
+            read = self.serial.read(1)
             if read[0] == 0:
                 null_count += 1
                 if null_count >= 20:
@@ -50,11 +52,37 @@ class BinarySwitcher:
             read_count += 1
         return buf
 
+    def write(self, buffer):
+        return self.serial.write(buffer)
+
+
+class LEDToggler:
+    def __init__(self, serial, *, tx_led, rx_led):
+        self.serial = serial
+        self.rx = rx_led
+        self.rx.switch_to_output()
+        self.tx = tx_led
+        self.tx.switch_to_output()
+
+    def read(self, length):
+        result = self.serial.read(length)
+        self.rx.value = True
+        self.rx.value = False
+        return result
+
+    def write(self, buffer):
+        self.tx.value = bool(buffer)
+        result = self.serial.write(buffer)
+        self.tx.value = False
+        return result
+
 
 class Mode:
     def __init__(self, input, output):
         self._input = input
         self._output = output
+
+        self.pull_ok = False
 
     def _print(self, *pos, end="\r\n"):
         pos = list(pos)
@@ -68,6 +96,22 @@ class Mode:
         message = message.replace("\n", "\r\n")
         return prompt_toolkit.prompt(message, input=self._input, output=self._output)
 
+    def _select_option(self, message, options, default=0):
+        self._print(message)
+        for i, option in enumerate(options):
+            self._print(f" {i+1}. {option}")
+        while True:
+            selection = self._prompt(f"({default+1})>")
+            if selection == "":
+                return default
+            try:
+                selection = int(selection, 10) - 1
+            except ValueError:
+                selection = -1
+            if 0 <= selection < len(options):
+                return selection
+            print("Invalid choice, try again")
+
     def run_macro(self, number):
         if number == 0:
             self._print("0. Macro menu")
@@ -78,11 +122,22 @@ class Mode:
             _, func = self.macros[number]
             func()
 
+
 class HiZ(Mode):
     name = "HiZ"
 
+    def deinit(self):
+        pass
+
     def run_sequence(self, sequence):
         pass
+
+    def print_pin_functions(self):
+        self._print("CLK     MOSI    CS      MISO")
+
+    def print_pin_directions(self):
+        self._print("I       I       I       I")
+
 
 class BusRead:
     def __init__(self, bits=8, repeat=1):
@@ -91,6 +146,7 @@ class BusRead:
 
     def __repr__(self):
         return f"BusRead(repeat={self.repeat})"
+
 
 class BusWrite:
     def __init__(self, value, bits=8, repeat=1):
@@ -101,13 +157,16 @@ class BusWrite:
     def __repr__(self):
         return f"BusWrite(0x{self.value:x}, repeat={self.repeat})"
 
+
 class BusClockTick:
     def __init__(self, repeat=1):
         self.repeat = repeat
 
+
 class BusBitRead:
     def __init__(self, repeat=1):
         self.repeat = repeat
+
 
 bus_sequence_chars = {
     "{": "START",
@@ -121,8 +180,9 @@ bus_sequence_chars = {
     "-": "DATA_HIGH",
     "_": "DATA_LOW",
     "!": BusBitRead,
-    ".": "READ_PIN"
+    ".": "READ_PIN",
 }
+
 
 def _parse_action(unparsed):
     print(unparsed)
@@ -131,7 +191,7 @@ def _parse_action(unparsed):
         pass
     elif ":" in unparsed:
         i = unparsed.index(":")
-        repeat = int("".join(unparsed[i+1:]), 0)
+        repeat = int("".join(unparsed[i + 1 :]), 0)
         unparsed = unparsed[:i]
     else:
         repeat = 1
@@ -151,6 +211,7 @@ def _parse_action(unparsed):
         return None
     return None
 
+
 def parse_bus_actions(commands):
     bus_sequence = []
     unparsed = []
@@ -164,7 +225,7 @@ def parse_bus_actions(commands):
             bus_sequence.append(action)
             unparsed = []
             numeric_ok = True
-        
+
         if c not in " ,":
             numeric_ok = numeric or c in ":;"
             unparsed.append(c)
@@ -176,12 +237,44 @@ def parse_bus_actions(commands):
         bus_sequence.append(action)
     return bus_sequence
 
+
 class Pyrate:
-    def __init__(self, input_, output, *, aux_pin, adc_pin, mosi_pin, clock_pin, miso_pin, cs_pin, scl_pin=None, sda_pin=None):
+    def __init__(
+        self,
+        input_,
+        output,
+        *,
+        aux_pin,
+        adc_pin,
+        mosi_pin,
+        clock_pin,
+        miso_pin,
+        cs_pin,
+        enable_5v_pin,
+        enable_3v_pin,
+        enable_pullups_pin,
+        measure_5v_pin,
+        measure_3v_pin,
+        vextern_pin,
+        mode_led_pin,
+        scl_pin=None,
+        sda_pin=None
+    ):
         self._input = input_
         self.output = output
         self.aux_pin = aux_pin
         self.user_pin = digitalio.DigitalInOut(aux_pin)
+
+        self.power_5v = digitalio.DigitalInOut(enable_5v_pin)
+        self.power_5v.switch_to_output(False)
+        self.power_3v = digitalio.DigitalInOut(enable_3v_pin)
+        self.power_3v.switch_to_output(False)
+
+        self.mode_led = digitalio.DigitalInOut(mode_led_pin)
+        self.mode_led.switch_to_output(False)
+
+        self.enable_pullups = digitalio.DigitalInOut(enable_pullups_pin)
+        self.enable_pullups.switch_to_output(False)
 
         # Bus pins
         self.pins = {}
@@ -195,39 +288,48 @@ class Pyrate:
         if sda_pin:
             self.pins["sda"] = sda_pin
 
-        self.adc_pin = analogio.AnalogIn(adc_pin)
+        self.adc = analogio.AnalogIn(adc_pin)
+        self.vextern = analogio.AnalogIn(vextern_pin)
+        self.measure_3v = analogio.AnalogIn(measure_3v_pin)
+        self.measure_5v = analogio.AnalogIn(measure_5v_pin)
 
         self.command_mapping = {
-            '?': self.help_menu,
-            'i': self.version_info,
-            'b': self.change_baudrate,
-            '=': self.convert_value,
-            '|': self.reverse_value,
-            'c': self.control_aux,
-            'C': self.control_cs,
-            'l': self.set_msb,
-            'L': self.set_lsb,
-            'a': self.set_pin_low,
-            'A': self.set_pin_high,
-            '@': self.read_pin,
-            'd': self.read_one_voltage,
-            'D': self.run_voltmeter,
-            'g': self.frequency_generator,
-            'S': self.servo_position,
-            'm': self.change_mode
+            "?": self.help_menu,
+            "i": self.version_info,
+            "b": self.change_baudrate,
+            "=": self.convert_value,
+            "|": self.reverse_value,
+            "c": self.control_aux,
+            "C": self.control_cs,
+            "l": self.set_msb,
+            "L": self.set_lsb,
+            "a": self.set_pin_low,
+            "A": self.set_pin_high,
+            "@": self.read_pin,
+            "d": self.read_one_voltage,
+            "D": self.run_voltmeter,
+            "g": self.frequency_generator,
+            "S": self.servo_position,
+            "m": self.change_mode,
+            "w": self.power_off,
+            "W": self.power_on,
+            "v": self.print_pin_states,
+            "p": self.disable_pulls,
+            "P": self.enable_pulls,
         }
 
         self.history = []
 
+        self.mode = None
         self.change_mode("1")
 
-    def _print(self, *pos):
+    def _print(self, *pos, end="\r\n"):
         pos = list(pos)
         for i, s in enumerate(pos):
             if isinstance(s, str):
                 pos[i] = s.replace("\n", "\r\n")
 
-        print(*pos, file=self.output, end="\r\n")
+        print(*pos, file=self.output, end=end)
 
     def _prompt(self, message) -> str:
         return prompt_toolkit.prompt(message, input=self._input, output=self.output)
@@ -237,9 +339,10 @@ class Pyrate:
 
     def version_info(self, args):
         import os
+
         self._print("Circuit Pyrate v0\nwww.adafruit.com")
-        self._print("Hardware: "+os.uname().machine)
-        self._print("CircuitPython: "+os.uname().version)
+        self._print("Hardware: " + os.uname().machine)
+        self._print("CircuitPython: " + os.uname().version)
 
     def change_baudrate(self, args):
         self._print("No baud rate change required for USB!")
@@ -254,7 +357,7 @@ class Pyrate:
         return None
 
     def _print_value(self, val):
-        self._print('0x{:02X} = {} = {:08b} '.format(val, val, val))
+        self._print("0x{:02X} = {} = {:08b} ".format(val, val, val))
 
     def convert_value(self, args):
         val = self._parse_int_value(args)
@@ -265,7 +368,7 @@ class Pyrate:
         flipped = 0
         for i in range(8):
             flipped >>= 1
-            if (val & 0x80):
+            if val & 0x80:
                 flipped |= 0x80
             val <<= 1
         val = flipped & 0xFF
@@ -297,11 +400,13 @@ class Pyrate:
         self.user_pin.switch_to_input()
         self._print("AUX INPUT/HI-Z, READ:", 1 if self.user_pin.value else 0)
 
+    def _read_voltage(self, adc):
+        return adc.value / 65535 * adc.reference_voltage * 2
+
     # Voltmeter readings
     def read_one_voltage(self, args):
-        self._print("VOLTAGE PROBE %0.2fV" %
-              (self.adc_pin.value / 65535 * self.adc_pin.reference_voltage))
-    
+        self._print("VOLTAGE PROBE %0.2fV" % self._read_voltage(self.adc))
+
     def run_voltmeter(self, args):
         self._print("VOLTMETER MODE\nAny key to exit")
         while self.serial.in_waiting == 0:
@@ -310,6 +415,47 @@ class Pyrate:
         # throw away the character
         self.serial.read(1)
         self._print("DONE")
+
+    def power_on(self, args):
+        self.power_3v.value = True
+        self.power_5v.value = True
+        self._print("Power supplies ON")
+
+    def power_off(self, args):
+        self.power_3v.value = False
+        self.power_5v.value = False
+        self._print("Power supplies OFF")
+
+    def print_pin_states(self, args):
+        self._print("Pinstates:")
+        self._print(
+            "1.(BR)  2.(RD)  3.(OR)  4.(YW)  5.(GN)  6.(BL)  7.(PU)  8.(GR)  9.(WT)  0.(Blk)"
+        )
+        self._print("GND     3.3V    5.0V    ADC     VPU     AUX     ", end="")
+        self.mode.print_pin_functions()
+        self._print("P       P       P       I       I       I       ", end="")
+        self.mode.print_pin_directions()
+        formatted_voltages = []
+        for adc in (self.measure_3v, self.measure_5v, self.adc, self.vextern):
+            formatted_voltages.append(f"{self._read_voltage(adc):1.2f}V   ")
+        formatted_voltages = "".join(formatted_voltages)
+        self._print(f"GND     {formatted_voltages}L       L       L       L       L")
+
+    def enable_pulls(self, args):
+        if not self.mode.pull_ok:
+            self._print("Command not used in this mode")
+            return
+        self.power_3v.value = True
+        self._print("Pull-up resistors ON")
+        if self.vextern.value < 1000:
+            self._print("Warning: no voltage on Vpullup pin")
+
+    def disable_pulls(self, args):
+        if not self.mode.pull_ok:
+            self._print("Command not used in this mode")
+            return
+        self.power_3v.value = False
+        self._print("Pull-up resistors OFF")
 
     def frequency_generator(self, args):
         # print("0.001 - 6000 KHz PWM/frequency generator")
@@ -336,8 +482,8 @@ class Pyrate:
         # duty = int(65535 * duty / 100)
         # # convert to hz
         # freq = int( (freq * 1000) + 0.5) # help round imprecise floats
-        
-        # print("PWM Active: {:d} {:0.2f}%".format(freq, duty/655.35)) 
+
+        # print("PWM Active: {:d} {:0.2f}%".format(freq, duty/655.35))
         # AUX.deinit()
         # AUX = pwmio.PWMOut(AUXPIN, duty_cycle=duty, frequency=freq)
         # AUX_PWMENABLED = True
@@ -380,7 +526,7 @@ class Pyrate:
         pass
 
     def change_mode(self, args):
-        print("mode", repr(args))
+        # print("mode", repr(args))
         if not args:
             self._print("1. HiZ")
             for i, mode in enumerate(modes):
@@ -389,6 +535,10 @@ class Pyrate:
             selection = self._prompt("(1) > ")
         else:
             selection = args
+
+        if self.mode:
+            self.mode.deinit()
+        self.mode = None
 
         try:
             new_mode = int(selection)
@@ -412,7 +562,6 @@ class Pyrate:
                 # Find the subclass of Mode
                 for attr in dir(mode_module):
                     entry = getattr(mode_module, attr)
-                    print("attr", attr, entry)
                     if isinstance(entry, type) and issubclass(entry, Mode):
                         mode_class = entry
                         break
@@ -420,8 +569,18 @@ class Pyrate:
                 self._print("Unknown mode")
                 self.mode = HiZ(self._input, self.output)
             else:
-                self._print("Mode selected")
-                self.mode = mode_class(self.pins, self._input, self.output)
+                try:
+                    self.mode = mode_class(self.pins, self._input, self.output)
+                    self._print("Mode selected")
+                except BaseException as e:
+                    if isinstance(e, ReloadException):
+                        raise e
+                    # Catch errors and go back to HiZ. Otherwise, we'll stop CircuitPython and be unresponsive.
+                    print(repr(e))
+                    self.mode = HiZ(self._input, self.output)
+                    self._print("Mode failed")
+
+        self.mode_led.value = not isinstance(self.mode, HiZ)
 
     def run_commands(self, commands):
         if not commands:
@@ -431,7 +590,7 @@ class Pyrate:
 
         if c in self.command_mapping:
             self.command_mapping[c](args)
-        elif c == 'h':
+        elif c == "h":
             for i, cmd in enumerate(reversed(self.history)):
                 serial.write(f"{i+1}. {cmd}\r\n".encode("utf-8"))
             serial.write(b"x. exit\r\n(0) ")
@@ -470,5 +629,6 @@ class Pyrate:
 
     def run_binary_mode(self):
         from . import bitbang_mode
+
         # Don't pass the wrapped input because it'll raise more exceptions.
-        bitbang_mode.run(self._input.serial_input, self.output, self.pins)
+        bitbang_mode.run(self._input.serial, self.output, self.pins)
