@@ -60,13 +60,13 @@ class SPI(Mode):
             if action == "START":
                 self.cs.value = not self.cs_idle
                 if self.cs_idle:
-                    self.print("/", end="")
-                self.print("CS ENABLED")
+                    self._print("/", end="")
+                self._print("CS ENABLED")
             elif action == "STOP":
                 self.cs.value = self.cs_idle
                 if self.cs_idle:
-                    self.print("/", end="")
-                self.print("CS DISABLED")
+                    self._print("/", end="")
+                self._print("CS DISABLED")
             elif isinstance(action, BusWrite):
                 buf = bytearray(action.repeat)
                 self._print(f"WRITE", end="")

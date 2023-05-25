@@ -1,6 +1,15 @@
 import analogio
+import board
 import digitalio
+import os
 import adafruit_prompt_toolkit as prompt_toolkit
+
+
+# __version__ = "0.0.0+auto.0"
+__version__ = "10.0.0"
+# Our version must be > 2.4 for flashrom to work with the v2 api.
+# TODO: Fix this URL
+__repo__ = "https://github.com/adafruit/Adafruit_CircuitPython_MCU_Flasher.git"
 
 HELP_MENU = """
 MENUS
@@ -31,7 +40,6 @@ modes = (
 
 class EnterBinaryMode(Exception):
     pass
-
 
 class BinarySwitcher:
     def __init__(self, serial):
@@ -262,8 +270,9 @@ class Pyrate:
     ):
         self._input = input_
         self.output = output
-        self.aux_pin = aux_pin
-        self.user_pin = digitalio.DigitalInOut(aux_pin)
+        self.aux = digitalio.DigitalInOut(aux_pin)
+        self.cs = digitalio.DigitalInOut(cs_pin)
+        self.user_pin = self.aux
 
         self.power_5v = digitalio.DigitalInOut(enable_5v_pin)
         self.power_5v.switch_to_output(False)
@@ -278,7 +287,6 @@ class Pyrate:
 
         # Bus pins
         self.pins = {}
-        self.pins["cs"] = cs_pin
         self.pins["mosi"] = mosi_pin
         self.pins["clock"] = clock_pin
         self.pins["miso"] = miso_pin
@@ -338,11 +346,9 @@ class Pyrate:
         self._print(HELP_MENU)
 
     def version_info(self, args):
-        import os
-
-        self._print("Circuit Pyrate v0\nwww.adafruit.com")
-        self._print("Hardware: " + os.uname().machine)
-        self._print("CircuitPython: " + os.uname().version)
+        self._print(f"Bus Pirate on {board.board_id}")
+        self._print(f"Firmware v{__version__} on CircuitPython {os.uname().version}")
+        self._print("https://adafruit.com")
 
     def change_baudrate(self, args):
         self._print("No baud rate change required for USB!")
@@ -375,12 +381,10 @@ class Pyrate:
         self._print_value(flipped)
 
     def control_aux(self, args):
-        self.user_pin.deinit()
-        self.user_pin = digitalio.DigitalInOut(self.aux_pin)
+        self.user_pin = self.aux
 
     def control_cs(self, args):
-        self.user_pin.deinit()
-        self.user_pin = digitalio.DigitalInOut(self.cs_pin)
+        self.user_pin = self.cs
 
     def set_msb(self, args):
         self.lsb = False
@@ -445,7 +449,7 @@ class Pyrate:
         if not self.mode.pull_ok:
             self._print("Command not used in this mode")
             return
-        self.power_3v.value = True
+        self.enable_pullups.value = True
         self._print("Pull-up resistors ON")
         if self.vextern.value < 1000:
             self._print("Warning: no voltage on Vpullup pin")
@@ -454,7 +458,7 @@ class Pyrate:
         if not self.mode.pull_ok:
             self._print("Command not used in this mode")
             return
-        self.power_3v.value = False
+        self.enable_pullups.value = False
         self._print("Pull-up resistors OFF")
 
     def frequency_generator(self, args):
@@ -605,19 +609,10 @@ class Pyrate:
                 commands = history[-selection]
                 self.run_commands(commands)
         elif c == "#" or c == "$":
-            serial.write("Are you sure? ")
-            yn = serial.read(1)
-            serial.write(yn)
-            serial.write(b"\r\n")
-            if yn == b"y":
-                # TODO: We probably shouldn't reset completely because the bus pirate
-                # wouldn't reset USB because it is a USB to serial converter.
-                if c == "$":
-                    microcontroller.on_next_reset(microcontroller.RunMode.BOOTLOADER)
-                    serial.write(b"BOOTLOADER\r\n")
-                else:
-                    serial.write(b"RESET\r\n")
-                microcontroller.reset()
+            yn = self._prompt("Are you sure? ")
+            print(repr(yn))
+            if yn == "y":
+                self.soft_reset()
         elif c == "(":
             m = int(commands.strip("()"), 0)
             self.mode.run_macro(m)
@@ -627,8 +622,30 @@ class Pyrate:
             if bus_sequence:
                 self.mode.run_sequence(bus_sequence)
 
-    def run_binary_mode(self):
+    def soft_reset(self):
+        if self.mode:
+            self.mode.deinit()
+        self.version_info(None)
+        self.mode = HiZ(self._input, self.output)
+        self.mode_led.value = False
+
+    def run_binary_command(self, command) -> bool:
+        if (command & 0xf0) == 0x40:
+            enable_power = (command & 0x8) != 0
+            self.power_3v.value = enable_power
+            self.power_5v.value = enable_power
+            enable_pulls = (command & 0x4) != 0
+            self.enable_pullups.value = enable_pulls
+            aux_high = (command & 0x2) != 0
+            self.aux.switch_to_output(value=aux_high)
+            cs_high = (command & 0x1) != 0
+            self.aux.switch_to_output(value=cs_high)
+            return True
+        return False
+
+    def run_binary_mode(self) -> bool:
         from . import bitbang_mode
 
         # Don't pass the wrapped input because it'll raise more exceptions.
-        bitbang_mode.run(self._input.serial, self.output, self.pins)
+        bitbang_mode.run(self._input.serial, self.output, self)
+        self.soft_reset()
