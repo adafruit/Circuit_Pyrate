@@ -25,7 +25,7 @@ S    \tServo control on AUX
 Unsupported: b, $"""
 
 modes = (
-    # ("1-WIRE", "onewire"),
+    ("1-WIRE", "onewire"),
     # ("UART", "uart"),
     ("I2C", "i2c"),
     ("SPI", "spi"),
@@ -89,6 +89,7 @@ class Mode:
     def __init__(self, input, output):
         self._input = input
         self._output = output
+        self.macros = {}
 
         self.pull_ok = False
 
@@ -127,6 +128,9 @@ class Mode:
                 name, _ = self.macros[num]
                 self._print(f"{num}. {name}")
         else:
+            if number not in self.macros:
+                self._print("Unknown macro, try ? or (0) for help")
+                return
             _, func = self.macros[number]
             func()
 
