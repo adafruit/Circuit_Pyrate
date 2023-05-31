@@ -21,12 +21,15 @@ class OneWire(Mode):
         self.onewire = adafruit_onewire.bus.OneWireBus(pins["mosi"])
 
         self.macros = {
+            # 1-50 are used for device rom shortcuts
             51 : ("READ ROM (0x33) *for single device bus", self.read_rom),
             # 85 : ("MATCH ROM (0x55) *followed by 64bit address", self.match_rom),
             204: ("SKIP ROM (0xCC) *followed by command", self.skip_rom),
             # 236: ("ALARM SEARCH (0xEC)", self.alarm_search),
             240: ("SEARCH ROM (0xF0)", self.search_rom),
         }
+
+        self._devices = {}
 
         self.pull_ok = True
 
@@ -57,17 +60,30 @@ class OneWire(Mode):
     def skip_rom(self):
         pass
 
+    def _format_rom(self, device):
+        formatted_rom = []
+        for b in device.rom:
+            formatted_rom.append(f"0x{b:02X}")
+        return " ".join(formatted_rom)
+
+    def _address_macro(self, i):
+        device = self._devices[i]
+        self._print(f"ADDRESS MACRO {i+1}: {self._format_rom(device)}")
+        self.onewire.write(device.rom)
+
     def search_rom(self):
         self._print("Macro    1WIRE address")
         for i, device in enumerate(self.onewire.scan()):
-            self._print(f" {i}.", end="")
-            for b in device.rom:
-                self._print(f" 0x{b:02X}", end="")
-            self._print()
+            self._print(f" {i+1}.", end="")
+            formatted_rom = self._format_rom(device)
+            self._print(formatted_rom)
+            device_name = "Unknown device"
             if device.rom[0] in KNOWN_DEVICES:
-                self._print(KNOWN_DEVICES[device.rom[0]])
-            else:
-                self._print("Unknown device")
+                device_name = KNOWN_DEVICES[device.rom[0]]
+            self._print(device_name)
+            if i < 50:
+                self._devices[i] = device
+                self.macros[i + 1] = (formatted_rom + "\n   " + device_name, lambda: self._address_macro(i))
 
     def run_sequence(self, sequence):
         for action in sequence:

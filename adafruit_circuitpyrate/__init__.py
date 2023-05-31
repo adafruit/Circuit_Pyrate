@@ -124,7 +124,8 @@ class Mode:
     def run_macro(self, number):
         if number == 0:
             self._print("0. Macro menu")
-            for num in self.macros:
+            options = sorted(self.macros.keys())
+            for num in options:
                 name, _ = self.macros[num]
                 self._print(f"{num}. {name}")
         else:
