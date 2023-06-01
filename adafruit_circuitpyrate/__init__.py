@@ -26,7 +26,7 @@ Unsupported: b, $"""
 
 modes = (
     ("1-WIRE", "onewire"),
-    # ("UART", "uart"),
+    ("UART", "uart"),
     ("I2C", "i2c"),
     ("SPI", "spi"),
     # ("2WIRE", "mode_2wire"),
@@ -44,6 +44,10 @@ class EnterBinaryMode(Exception):
 class BinarySwitcher:
     def __init__(self, serial):
         self.serial = serial
+
+    @property
+    def in_waiting(self):
+        return self.serial.in_waiting
 
     def read(self, length):
         buf = bytearray(length)
@@ -71,6 +75,10 @@ class LEDToggler:
         self.rx.switch_to_output()
         self.tx = tx_led
         self.tx.switch_to_output()
+
+    @property
+    def in_waiting(self):
+        return self.serial.in_waiting
 
     def read(self, length):
         result = self.serial.read(length)
@@ -276,7 +284,7 @@ class Pyrate:
         self._input = input_
         self.output = output
         self.aux = digitalio.DigitalInOut(aux_pin)
-        self.cs = digitalio.DigitalInOut(cs_pin)
+        self.cs = None
         self.user_pin = self.aux
 
         self.power_5v = digitalio.DigitalInOut(enable_5v_pin)
@@ -295,6 +303,7 @@ class Pyrate:
         self.pins["mosi"] = mosi_pin
         self.pins["clock"] = clock_pin
         self.pins["miso"] = miso_pin
+        self.pins["cs"] = cs_pin
 
         if scl_pin:
             self.pins["scl"] = scl_pin
@@ -386,10 +395,18 @@ class Pyrate:
         self._print_value(flipped)
 
     def control_aux(self, args):
+        if self.cs:
+            self.cs.deinit()
+            self.cs = None
         self.user_pin = self.aux
 
     def control_cs(self, args):
-        self.user_pin = self.cs
+        # Use the mode's cs DigitalInOut when available.
+        if hasattr(self.mode, "cs"):
+            self.user_pin = self.mode.cs
+        else:
+            self.cs = digitalio.DigitalInOut(self.pins["cs"])
+            self.user_pin = self.cs
 
     def set_msb(self, args):
         self.lsb = False
@@ -644,13 +661,17 @@ class Pyrate:
             aux_high = (command & 0x2) != 0
             self.aux.switch_to_output(value=aux_high)
             cs_high = (command & 0x1) != 0
-            self.aux.switch_to_output(value=cs_high)
+            self.cs.switch_to_output(value=cs_high)
             return True
         return False
 
     def run_binary_mode(self) -> bool:
         from . import bitbang_mode
 
+        # We manage CS in bitbang mode.
+        self.cs = digitalio.DigitalInOut(self.pins["cs"])
         # Don't pass the wrapped input because it'll raise more exceptions.
         bitbang_mode.run(self._input.serial, self.output, self)
+        self.cs.deinit()
+        self.cs = None
         self.soft_reset()
